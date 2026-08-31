@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>知构引擎科研分析工作台</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="nav-panel" aria-label="主导航">
+      <div class="brand">
+        <img class="brand-logo" src="/assets/logo.png" alt="知构引擎 Logo" />
+        <div class="brand-copy">
+          <strong>知构引擎</strong>
+          <span>科研分析 Agent</span>
+        </div>
+      </div>
+
+      <label class="search-box" aria-label="搜索历史">
+        <span class="icon" data-icon="search"></span>
+        <input id="historySearch" type="search" placeholder="搜索对话..." />
+      </label>
+
+      <nav class="nav-actions">
+        <button class="nav-action primary-action" id="newChatBtn" type="button">
+          <span class="icon" data-icon="plus"></span>
+          <span>新建分析</span>
+        </button>
+        <button class="nav-action" id="loadDemoBtn" type="button">
+          <span class="icon" data-icon="sparkles"></span>
+          <span>示例数据</span>
+        </button>
+        <button class="nav-action" id="importFileBtn" type="button">
+          <span class="icon" data-icon="upload"></span>
+          <span>导入数据</span>
+        </button>
+        <button class="nav-action" id="downloadReportBtn" type="button">
+          <span class="icon" data-icon="download"></span>
+          <span>生成报告</span>
+        </button>
+        <input id="fileInput" type="file" accept=".csv,.json,.txt" hidden />
+      </nav>
+
+      <section class="history-section">
+        <div class="section-kicker">最近对话</div>
+        <div id="historyList" class="history-list"></div>
+      </section>
+
+      <section class="plan-dock">
+        <div>
+          <span class="section-kicker">当前订阅</span>
+          <strong id="planBadge">专业版</strong>
+        </div>
+        <button class="icon-button" id="subscriptionExpandBtn" type="button" title="展开订阅方案" aria-label="展开订阅方案">
+          <span class="icon" data-icon="chevrons"></span>
+        </button>
+      </section>
+    </aside>
+
+    <main class="chat-workspace">
+      <header class="app-header">
+        <div class="header-title">
+          <button class="icon-button mobile-only" id="mobileSidebarBtn" type="button" aria-label="打开导航">
+            <span class="icon" data-icon="menu"></span>
+          </button>
+          <div>
+            <div class="eyebrow">物理约束 · 符号回归 · 假设排行</div>
+            <h1>知构引擎科研分析工作台</h1>
+          </div>
+        </div>
+        <div class="header-actions">
+          <button class="soft-button status-button" id="llmStatusBtn" type="button" title="对话分析已就绪">
+            <span class="icon" data-icon="sparkles"></span>
+            <span id="llmStatusText">智能对话</span>
+          </button>
+          <button class="soft-button" id="themeToggleBtn" type="button">
+            <span class="icon" data-icon="palette"></span>
+            <span id="themeToggleText">白蓝主题</span>
+          </button>
+          <button class="soft-button" id="subscriptionToggleBtn" type="button">
+            <span class="icon" data-icon="badge"></span>
+            <span id="subscriptionToggleText">专业版</span>
+          </button>
+          <button class="icon-button" id="inspectorToggleBtn" type="button" title="展开分析面板" aria-label="展开分析面板">
+            <span class="icon" data-icon="panel"></span>
+          </button>
+        </div>
+      </header>
+
+      <section class="chat-panel">
+        <div class="chat-status">
+          <span id="analysisStatus">准备分析</span>
+          <span id="datasetHint">当前使用示例数据</span>
+        </div>
+
+        <div id="messages" class="messages"></div>
+
+        <div class="quick-actions" id="quickActions">
+          <button type="button">帮我筛选最合适的物理模型</button>
+          <button type="button">生成一份 DOCX 报告</button>
+          <button type="button">检查物理约束有没有违规</button>
+          <button type="button">解释当前拟合公式</button>
+        </div>
+
+        <form class="composer" id="composerForm">
+          <textarea id="chatInput" rows="1" placeholder="给知构引擎发送消息，或粘贴实验数据让它分析..."></textarea>
+          <div class="composer-toolbar">
+            <div class="composer-tools">
+              <button class="tool-button" id="runAnalysisBtn" type="button">
+                <span class="icon" data-icon="scan"></span>
+                <span>分析</span>
+              </button>
+              <button class="tool-button" id="clearDataBtn" type="button">
+                <span class="icon" data-icon="trash"></span>
+                <span>清空</span>
+              </button>
+              <button class="tool-button" id="reportPreviewBtn" type="button">
+                <span class="icon" data-icon="report"></span>
+                <span>预览报告</span>
+              </button>
+            </div>
+            <button class="send-button" id="sendBtn" type="submit" aria-label="发送">
+              <span class="icon" data-icon="send"></span>
+            </button>
+          </div>
+        </form>
+      </section>
+    </main>
+
+    <aside class="inspector-panel" id="inspectorPanel" aria-label="分析面板">
+      <div class="inspector-head">
+        <div>
+          <span class="section-kicker">实时分析</span>
+          <strong>实验数据驾驶舱</strong>
+        </div>
+        <button class="icon-button mobile-only" id="closeInspectorBtn" type="button" aria-label="关闭分析面板">
+          <span class="icon" data-icon="close"></span>
+        </button>
+      </div>
+
+      <div class="inspector-tabs" id="inspectorTabs" role="tablist" aria-label="分析面板视图">
+        <button class="active" type="button" data-inspector-tab="analysis">
+          <span class="icon" data-icon="scan"></span>
+          <span>分析</span>
+        </button>
+        <button type="button" data-inspector-tab="data">
+          <span class="icon" data-icon="database"></span>
+          <span>数据</span>
+        </button>
+        <button type="button" data-inspector-tab="report">
+          <span class="icon" data-icon="report"></span>
+          <span>报告</span>
+        </button>
+        <button type="button" data-inspector-tab="plan">
+          <span class="icon" data-icon="badge"></span>
+          <span>订阅</span>
+        </button>
+      </div>
+
+      <section class="metrics-grid inspector-view active" data-inspector-view="analysis">
+        <div class="metric">
+          <span>推荐模型</span>
+          <strong id="bestModel">-</strong>
+        </div>
+        <div class="metric">
+          <span>置信度</span>
+          <strong id="confidenceValue">-</strong>
+        </div>
+        <div class="metric">
+          <span>异常点</span>
+          <strong id="anomalyValue">-</strong>
+        </div>
+      </section>
+
+      <section class="inspector-card dataset-card inspector-view" data-inspector-view="data">
+        <div class="card-head">
+          <strong>数据输入</strong>
+          <span>CSV / JSON</span>
+        </div>
+        <textarea id="datasetInput" rows="9" spellcheck="false"></textarea>
+      </section>
+
+      <section class="inspector-card inspector-view active" data-inspector-view="analysis">
+        <div class="card-head">
+          <strong>拟合曲线</strong>
+          <span>观测 vs 模型</span>
+        </div>
+        <div id="chart" class="chart"></div>
+      </section>
+
+      <section class="inspector-card inspector-view active" data-inspector-view="analysis">
+        <div class="card-head">
+          <strong>物理约束校验</strong>
+          <span id="physicsSummary">等待分析</span>
+        </div>
+        <div id="physicsViolationList" class="physics-list"></div>
+      </section>
+
+      <section class="inspector-card inspector-view active" data-inspector-view="analysis">
+        <div class="card-head">
+          <strong>假设排行</strong>
+          <span>拟合 + 约束</span>
+        </div>
+        <div id="modelGrid" class="model-grid"></div>
+      </section>
+
+      <section class="inspector-card inspector-view active" data-inspector-view="analysis">
+        <div class="card-head">
+          <strong>异常诊断</strong>
+          <span>残差复核</span>
+        </div>
+        <div id="anomalyList" class="anomaly-list"></div>
+      </section>
+
+      <section class="inspector-card inspector-view" data-inspector-view="report">
+        <div class="card-head">
+          <strong>报告预览</strong>
+          <span>可下载 DOCX</span>
+        </div>
+        <div id="reportPreview" class="report-preview"></div>
+        <button class="mini-button block-button" id="reportPanelDownloadBtn" type="button">
+          <span class="icon" data-icon="download"></span>
+          <span>下载 DOCX 报告</span>
+        </button>
+      </section>
+
+      <section class="inspector-card compact-section inspector-view" data-inspector-view="plan">
+        <div class="card-head">
+          <strong>订阅方案</strong>
+          <span>点击切换</span>
+        </div>
+        <div id="subscriptionDock" class="subscription-dock"></div>
+        <div id="subscriptionCards" class="subscription-cards hidden"></div>
+      </section>
+
+    </aside>
+  </div>
+
+  <div id="reportModal" class="report-modal hidden" aria-hidden="true">
+    <div class="report-modal-panel">
+      <div class="modal-head">
+        <strong>对话中生成的分析报告</strong>
+        <div class="modal-actions">
+          <button class="soft-button" id="reportModalDownloadBtn" type="button">
+            <span class="icon" data-icon="download"></span>
+            <span>下载 DOCX</span>
+          </button>
+          <button class="icon-button" id="closeReportModalBtn" type="button" aria-label="关闭">
+            <span class="icon" data-icon="close"></span>
+          </button>
+        </div>
+      </div>
+      <div id="reportModalBody" class="report-preview"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" aria-live="polite"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,68 @@
+<component name="InspectionProjectProfileManager">
+  <profile version="1.0">
+    <option name="myName" value="Project Default" />
+    <inspection_tool class="PyPackageRequirementsInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredPackages">
+        <list>
+          <option value="contourpy" />
+          <option value="matplotlib" />
+          <option value="networkx" />
+          <option value="numpy" />
+          <option value="opencv-python" />
+          <option value="packaging" />
+          <option value="pillow" />
+          <option value="polars" />
+          <option value="PySide6" />
+          <option value="PySide6_Addons" />
+          <option value="PySide6_Essentials" />
+          <option value="scipy" />
+          <option value="shiboken6" />
+          <option value="sympy" />
+          <option value="torch" />
+          <option value="torchvision" />
+          <option value="ultralytics" />
+          <option value="pygame" />
+          <option value="pandas" />
+          <option value="pytz" />
+          <option value="tzdata" />
+          <option value="SpeechRecognition" />
+          <option value="sounddevice" />
+          <option value="kiwisolver" />
+          <option value="opencv-python-headless" />
+          <option value="streamlit" />
+          <option value="langchain" />
+          <option value="langchain-community" />
+          <option value="langgraph" />
+          <option value="openai" />
+          <option value="chromadb" />
+          <option value="faiss-cpu" />
+          <option value="pypdf" />
+          <option value="python-pptx" />
+          <option value="faster-whisper" />
+          <option value="pyttsx3" />
+          <option value="python-dotenv" />
+          <option value="requests" />
+          <option value="tqdm" />
+          <option value="pyyaml" />
+          <option value="pyserial" />
+        </list>
+      </option>
+    </inspection_tool>
+    <inspection_tool class="PyStubPackagesAdvertiser" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredPackages">
+        <list>
+          <option value="scipy" />
+          <option value="pandas" />
+        </list>
+      </option>
+    </inspection_tool>
+    <inspection_tool class="PyUnresolvedReferencesInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredIdentifiers">
+        <list>
+          <option value="cv2.*" />
+        </list>
+      </option>
+    </inspection_tool>
+    <inspection_tool class="SqlNoDataSourceInspection" enabled="false" level="WARNING" enabled_by_default="false" />
+  </profile>
+</component>
