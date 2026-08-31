@@ -9,3 +9,7 @@ dependencies = [
     "pg0-embedded>=0.15.1",
     "uvicorn[standard]>=0.30",
 ]
+
+# 加上下面这块配置
+[tool.vercel]
+entrypoint = "backend/server.py"
