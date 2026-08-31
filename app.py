@@ -11,7 +11,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
-
+from backend.server import app
 from pg0 import Pg0
 
 from zhi_engine.analysis import analyze_dataset, build_report_markdown, demo_dataset
