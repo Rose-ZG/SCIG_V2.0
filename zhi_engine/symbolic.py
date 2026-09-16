@@ -319,7 +319,7 @@ def _build_basis_library(
 def _format_formula(coeffs: list[float], terms: list[dict[str, Any]]) -> tuple[str, str, list[dict[str, Any]]]:
     rhs_parts = [_format_number(coeffs[0])]
     display_terms: list[dict[str, Any]] = []
-    for index, (coef, term) in enumerate(zip(coeffs[1:], terms, strict=False), start=1):
+    for index, (coef, term) in enumerate(zip(coeffs[1:], terms), start=1):
         if abs(coef) < 1e-10:
             continue
         sign = "+" if coef >= 0 else "-"
@@ -342,6 +342,68 @@ def _infer_family(terms: list[dict[str, Any]]) -> str:
     if any("*" in expression for expression in expressions):
         return "polynomial"
     return "linear"
+
+
+def refit_symbolic_basis(rows: list[dict], basis_terms: list[str]) -> dict[str, Any]:
+    """Refit a previously selected symbolic structure on a new sample.
+
+    Cross-validation and bootstrap must refit coefficients instead of evaluating
+    the full-data coefficients on held-out rows.  Keeping the basis fixed makes
+    the evidence reproducible while still testing parameter stability.
+    """
+    if not rows or not basis_terms:
+        raise ValueError("symbolic refit requires rows and basis terms")
+
+    temperatures = [float(row["temperature"]) for row in rows]
+    target = [float(row["conversion"]) for row in rows]
+    term_values: list[list[float]] = []
+    terms: list[dict[str, Any]] = []
+    for expression in basis_terms:
+        values = _evaluate_series(expression, temperatures)
+        if values is None:
+            raise ValueError(f"symbolic basis cannot be evaluated: {expression}")
+        term_values.append(values)
+        terms.append({"expression": expression, "complexity": _expression_complexity(expression)})
+
+    design = [
+        [1.0] + [values[row_index] for values in term_values]
+        for row_index in range(len(rows))
+    ]
+    coeffs = _fit_linear_model(design, target)
+    if coeffs is None:
+        raise ValueError("symbolic basis is singular on the supplied sample")
+
+    raw_predictions = [
+        sum(coef * value for coef, value in zip(coeffs, design_row))
+        for design_row in design
+    ]
+    predictions = [_clamp01(value) for value in raw_predictions]
+    rmse, r2 = _score_predictions(target, predictions)
+    equation, formula_expression, formula_terms = _format_formula(coeffs, terms)
+    complexity = sum(term["complexity"] for term in terms) + len(terms)
+    effective_params = len(coeffs) + 0.55 * complexity
+
+    parameters = {"intercept": round(float(coeffs[0]), 8)}
+    for index, coef in enumerate(coeffs[1:], start=1):
+        parameters[f"coef_{index}"] = round(float(coef), 8)
+
+    return {
+        "key": "symbolic_refit",
+        "kind": "symbolic",
+        "basis_terms": list(basis_terms),
+        "equation": equation,
+        "formula_expression": formula_expression,
+        "formula_terms": formula_terms,
+        "parameters": parameters,
+        "effective_params": round(effective_params, 3),
+        "predictions": [round(value, 8) for value in predictions],
+        "raw_predictions": [round(value, 8) for value in raw_predictions],
+        "residuals": [round(y - p, 8) for y, p in zip(target, predictions)],
+        "r2": round(r2, 8),
+        "rmse": round(rmse, 8),
+        "bic": round(_calc_bic(rmse, len(rows), effective_params), 8),
+        "complexity": complexity,
+    }
 
 
 def build_symbolic_regression_layer(

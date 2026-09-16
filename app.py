@@ -22,7 +22,7 @@ from zhi_engine.store import ConversationStore
 
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
-ASSETS = ROOT / "assets"
+ASSETS = STATIC / "assets"
 DATA = ROOT / "data"
 DATA.mkdir(exist_ok=True)
 
@@ -239,6 +239,11 @@ class AppHandler(BaseHTTPRequestHandler):
                     "physics_constraints": sample_result["physics_constraints"],
                     "symbolic_regression_layer": sample_result["symbolic_regression_layer"],
                     "hypothesis_ranking": sample_result["hypothesis_ranking"],
+                    "evidence_gates": sample_result["evidence_gates"],
+                    "open_set_decision": sample_result["open_set_decision"],
+                    "experiment_design": sample_result["experiment_design"],
+                    "data_contract": sample_result["data_contract"],
+                    "audit": sample_result["audit"],
                 }
             )
             return

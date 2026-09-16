@@ -42,7 +42,7 @@ class ConversationStore:
         if psycopg is None:  # pragma: no cover - dependency error is environment-specific
             raise RuntimeError(
                 "PostgreSQL storage requires the `psycopg[binary]` package. "
-                "Install dependencies from requirements.txt first."
+                "Install the project dependencies with `python -m pip install -e .` first."
             ) from _PSYCOPG_IMPORT_ERROR
 
         self.database_url = database_url.strip()

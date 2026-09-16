@@ -117,7 +117,7 @@ def _add_table(doc: Document, headers: list[str], rows: list[list[str]], widths:
             _set_cell_text(cells[index], value, size=9)
     if widths:
         for row in table.rows:
-            for cell, width in zip(row.cells, widths, strict=False):
+            for cell, width in zip(row.cells, widths):
                 cell.width = Inches(width)
 
 
@@ -163,6 +163,8 @@ def build_report_docx(result: dict, title: str, logo_path: str | Path | None = N
             ("拟合 R²", str(best.get("r2", "-"))),
             ("RMSE", str(best.get("rmse", "-"))),
             ("异常点", f"{summary.get('anomaly_count', 0)} 个"),
+            ("通过三道门控", f"{summary.get('models_passing_all_gates', 0)} 个模型"),
+            ("结论状态", "暂缓唯一结论" if summary.get("abstained") else "可形成暂定结论"),
         ]
     )
 
@@ -218,18 +220,19 @@ def build_report_docx(result: dict, title: str, logo_path: str | Path | None = N
     if ranking_items:
         _add_table(
             doc,
-            ["排名", "假设模型", "综合评分", "约束评分", "是否可行"],
+            ["排名", "假设模型", "门控", "AICc", "CV-RMSE", "稳定性"],
             [
                 [
                     str(item.get("rank", "")),
                     str(item.get("name", "")),
-                    str(item.get("combined_score", "")),
-                    str(item.get("constraint_score", "")),
-                    "是" if item.get("feasible") else "否",
+                    str(item.get("gate_status", "")),
+                    str(item.get("aicc", "")),
+                    str(item.get("cv_rmse", "")),
+                    str(item.get("stability_score", "")),
                 ]
                 for item in ranking_items
             ],
-            widths=[0.55, 1.6, 1.0, 1.0, 0.8],
+            widths=[0.45, 1.45, 0.7, 0.9, 0.9, 0.8],
         )
     else:
         _add_bullet(doc, "暂无可展示的假设排行。")
@@ -246,16 +249,54 @@ def build_report_docx(result: dict, title: str, logo_path: str | Path | None = N
     if anomalies:
         _add_table(
             doc,
-            ["温度", "转化率", "批次", "等级", "说明"],
-            [[str(a["temperature"]), str(a["conversion"]), str(a["batch"]), str(a["severity"]), a["reason"]] for a in anomalies],
-            widths=[0.8, 0.8, 0.8, 0.6, 3.8],
+            ["温度", "转化率", "批次", "等级", "归因", "建议动作"],
+            [
+                [
+                    str(a["temperature"]),
+                    str(a["conversion"]),
+                    str(a["batch"]),
+                    str(a["severity"]),
+                    str(a.get("conclusion", "待复核")),
+                    str(a.get("action", a.get("reason", ""))),
+                ]
+                for a in anomalies
+            ],
+            widths=[0.65, 0.72, 0.65, 0.55, 0.9, 3.0],
         )
     else:
         _add_bullet(doc, "当前未发现需要重点复核的异常点。")
 
     doc.add_heading("八、下一步实验建议", level=1)
+    design = result.get("experiment_design", {})
+    recommended = design.get("recommended")
+    if recommended:
+        _add_key_value_table(
+            doc,
+            [
+                ("推荐温度", f"{recommended.get('temperature')} °C"),
+                ("预期信息增益", str(recommended.get("expected_information_gain"))),
+                ("估算成本", str(recommended.get("estimated_cost"))),
+                ("区域", str(recommended.get("region"))),
+                ("人工确认", "需要" if design.get("human_confirmation_required") else "不需要"),
+            ],
+        )
     for item in result.get("suggestions", []):
         _add_numbered(doc, item)
+
+    doc.add_heading("九、开放集与审计", level=1)
+    open_set = result.get("open_set_decision", {})
+    audit = result.get("audit", {})
+    _add_key_value_table(
+        doc,
+        [
+            ("H_other 概率", str(open_set.get("h_other_probability", "-"))),
+            ("后验熵", str(open_set.get("posterior_entropy", "-"))),
+            ("拒答", "是" if open_set.get("abstain") else "否"),
+            ("决策", str(open_set.get("decision", "-"))),
+            ("数据摘要", str(audit.get("data_sha256", "-"))),
+            ("引擎版本", str(audit.get("engine_version", "-"))),
+        ],
+    )
 
     buffer = io.BytesIO()
     doc.save(buffer)

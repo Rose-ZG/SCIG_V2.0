@@ -1,7 +1,9 @@
 [project]
 name = "scig"
-version = "0.1.0"
-description = "SCIG Project"
+version = "0.5.0"
+description = "Scientific decision engine for evidence-aware model selection and next-experiment planning"
+readme = "README.md"
+requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.115",
     "psycopg[binary]>=3.2",
@@ -9,3 +11,14 @@ dependencies = [
     "pg0-embedded>=0.15.1",
     "uvicorn[standard]>=0.30",
 ]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["zhi_engine", "backend"]
+py-modules = ["app"]
+
+[tool.vercel]
+entrypoint = "backend.server:app"

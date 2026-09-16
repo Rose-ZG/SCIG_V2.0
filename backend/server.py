@@ -22,7 +22,7 @@ from zhi_engine.store import ConversationStore
 
 ROOT = Path(__file__).resolve().parents[1]
 STATIC = ROOT / "static"
-ASSETS = ROOT / "assets"
+ASSETS = STATIC / "assets"
 DATA = ROOT / "data"
 
 if os.environ.get("VERCEL"):
@@ -247,13 +247,13 @@ def _compose_answer(intent: str, result: dict[str, Any]) -> str:
     return "我可以帮你筛模型、拟合曲线、找异常点，并把结果整理成对话里的报告。"
 
 
-def _bootstrap_payload(runtime: Runtime) -> dict[str, Any]:
+def _bootstrap_payload(runtime: Runtime | None = None) -> dict[str, Any]:
     sample_result = analyze_dataset(demo_dataset())
     return {
-        "deployment_mode": runtime.deployment_mode,
-        "database_mode": runtime.database_mode,
-        "llm_provider": runtime.deepseek.public_state(),
-        "conversations": runtime.store.list_conversations(),
+        "deployment_mode": runtime.deployment_mode if runtime else _deployment_mode(),
+        "database_mode": runtime.database_mode if runtime else "unconfigured",
+        "llm_provider": runtime.deepseek.public_state() if runtime else load_deepseek_settings().public_state(mode="offline_demo"),
+        "conversations": runtime.store.list_conversations() if runtime else [],
         "dataset": demo_dataset(),
         "themes": [
             {"key": "dark", "name": "暗黑"},
@@ -272,45 +272,22 @@ def _bootstrap_payload(runtime: Runtime) -> dict[str, Any]:
         "physics_constraints": sample_result["physics_constraints"],
         "symbolic_regression_layer": sample_result["symbolic_regression_layer"],
         "hypothesis_ranking": sample_result["hypothesis_ranking"],
+        "evidence_gates": sample_result["evidence_gates"],
+        "open_set_decision": sample_result["open_set_decision"],
+        "experiment_design": sample_result["experiment_design"],
+        "data_contract": sample_result["data_contract"],
+        "audit": sample_result["audit"],
     }
 
 
 @app.get("/api/bootstrap")
 async def bootstrap():
     try:
-
-        return {
-            "status": "success",
-            "mode": "production" if os.getenv("DEEPSEEK_API_KEY") else "demo",
-            "current_model": "Zhigou-Engine-v2.1.0",
-            "features": {
-                "physics_constraint": True,
-                "symbolic_regression": True,
-                "hypothesis_ranking": True
-            },
-            "initial_data": {
-                "dataset_name": "HighTemp_Kinetics_v4.2",
-                "points_count": 8,
-                "r2_score": 0.987,
-                "confidence": "98.7%",
-                "status": "READY"
-            }
-        }
-    except Exception as e:
-        # 如果遇到未配置环境或数据库异常，静默降级为演示模式，不返回 500 报错
-        print(f"Bootstrap warning: {e}, falling back to default demo state.")
-        return {
-            "status": "success",
-            "mode": "demo_fallback",
-            "message": "Running in offline demo mode",
-            "initial_data": {
-                "dataset_name": "HighTemp_Kinetics_v4.2",
-                "points_count": 8,
-                "r2_score": 0.987,
-                "confidence": "98.7%",
-                "status": "READY"
-            }
-        }
+        return _bootstrap_payload(_get_runtime())
+    except Exception:
+        payload = _bootstrap_payload()
+        payload["configuration_warning"] = "数据库尚未配置，当前仅返回离线演示能力；分析记录不会持久化。"
+        return payload
 
 
 @app.get("/api/conversations/{conversation_id}")

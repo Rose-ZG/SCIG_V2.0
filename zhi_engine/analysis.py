@@ -7,6 +7,13 @@ import statistics
 from datetime import datetime
 from typing import Any
 
+from zhi_engine.decision import (
+    build_anomaly_attribution,
+    build_audit_record,
+    build_evidence_gates,
+    build_experiment_design,
+    build_open_set_decision,
+)
 from zhi_engine.symbolic import build_symbolic_regression_layer, evaluate_symbolic_formula
 
 
@@ -168,7 +175,12 @@ def _as_float(row: dict[str, Any], keys: list[str]) -> float:
     return float(value)
 
 
-def _clean_dataset(dataset: object, feature_names: list[str] | None = None) -> list[dict]:
+def _clean_dataset(
+    dataset: object,
+    feature_names: list[str] | None = None,
+    config: dict[str, Any] | None = None,
+) -> list[dict]:
+    config = dict(config or {})
     if isinstance(dataset, str):
         rows = list(csv.DictReader(io.StringIO(dataset)))
     elif isinstance(dataset, list):
@@ -180,18 +192,75 @@ def _clean_dataset(dataset: object, feature_names: list[str] | None = None) -> l
     for index, row in enumerate(rows):
         try:
             mapping = _row_to_mapping(row, feature_names=feature_names)
-            temp = _as_float(mapping, ["temperature", "temp", "t", "x", "温度"])
-            value = _as_float(mapping, ["conversion", "response", "yield", "y", "转化率"])
+            raw_temp = _as_float(mapping, ["temperature", "temp", "t", "x", "温度"])
+            raw_value = _as_float(mapping, ["conversion", "response", "yield", "y", "转化率"])
         except (AttributeError, TypeError, ValueError, KeyError) as exc:
             raise ValueError(f"第 {index + 1} 行缺少有效的 temperature / conversion") from exc
 
+        temperature_unit = str(
+            _extract_first(mapping, ["temperature_unit", "temp_unit", "温度单位"], config.get("temperature_unit", "C"))
+        ).strip().lower()
+        conversion_unit = str(
+            _extract_first(mapping, ["conversion_unit", "response_unit", "转化率单位"], config.get("conversion_unit", "fraction"))
+        ).strip().lower()
+        if temperature_unit in {"k", "kelvin", "开尔文"}:
+            temp = raw_temp - 273.15
+            normalized_temperature_unit = "C"
+        elif temperature_unit in {"f", "fahrenheit", "华氏度", "°f"}:
+            temp = (raw_temp - 32.0) * 5.0 / 9.0
+            normalized_temperature_unit = "C"
+        elif temperature_unit in {"c", "celsius", "摄氏度", "°c"}:
+            temp = raw_temp
+            normalized_temperature_unit = "C"
+        else:
+            raise ValueError(f"第 {index + 1} 行使用了不支持的温度单位: {temperature_unit}")
+
+        if conversion_unit in {"%", "percent", "percentage", "百分比"}:
+            value = raw_value / 100.0
+            normalized_conversion_unit = "fraction"
+        elif conversion_unit in {"fraction", "ratio", "比例", "1"}:
+            value = raw_value
+            normalized_conversion_unit = "fraction"
+        else:
+            raise ValueError(f"第 {index + 1} 行使用了不支持的转化率单位: {conversion_unit}")
+        if not math.isfinite(temp) or not math.isfinite(value):
+            raise ValueError(f"第 {index + 1} 行包含非有限数值")
+
         batch = _extract_first(mapping, ["batch", "批次"], "未标注")
+        raw_uncertainty = _extract_first(mapping, ["uncertainty", "error", "sigma", "measurement_uncertainty", "测量误差"])
+        measurement_uncertainty = None
+        if raw_uncertainty not in (None, ""):
+            measurement_uncertainty = abs(float(raw_uncertainty))
+            if conversion_unit in {"%", "percent", "percentage", "百分比"}:
+                measurement_uncertainty /= 100.0
         cleaned_row = {
             "temperature": temp,
             "conversion": value,
             "batch": str(batch),
             "source_index": index,
+            "source_id": str(_extract_first(mapping, ["source_id", "sample_id", "样本号"], f"row-{index + 1}")),
+            "temperature_unit": normalized_temperature_unit,
+            "conversion_unit": normalized_conversion_unit,
+            "raw": {
+                "temperature": raw_temp,
+                "conversion": raw_value,
+                "temperature_unit": temperature_unit,
+                "conversion_unit": conversion_unit,
+            },
         }
+        if measurement_uncertainty is not None:
+            cleaned_row["measurement_uncertainty"] = measurement_uncertainty
+        provenance = {
+            key: _extract_first(mapping, aliases)
+            for key, aliases in {
+                "instrument": ["instrument", "device", "仪器"],
+                "operator": ["operator", "researcher", "操作员"],
+                "replicate": ["replicate", "repeat", "重复编号"],
+                "recorded_at": ["recorded_at", "timestamp", "time", "记录时间"],
+                "source": ["source", "data_source", "数据来源"],
+            }.items()
+        }
+        cleaned_row["provenance"] = {key: value for key, value in provenance.items() if value not in (None, "")}
         extra = {
             key: value
             for key, value in mapping.items()
@@ -209,6 +278,36 @@ def _clean_dataset(dataset: object, feature_names: list[str] | None = None) -> l
                 "转化率",
                 "batch",
                 "批次",
+                "temperature_unit",
+                "temp_unit",
+                "温度单位",
+                "conversion_unit",
+                "response_unit",
+                "转化率单位",
+                "uncertainty",
+                "error",
+                "sigma",
+                "measurement_uncertainty",
+                "测量误差",
+                "source_id",
+                "sample_id",
+                "样本号",
+                "instrument",
+                "device",
+                "仪器",
+                "operator",
+                "researcher",
+                "操作员",
+                "replicate",
+                "repeat",
+                "重复编号",
+                "recorded_at",
+                "timestamp",
+                "time",
+                "记录时间",
+                "source",
+                "data_source",
+                "数据来源",
             }
         }
         if extra:
@@ -247,7 +346,7 @@ def _normalize_request(dataset: object) -> tuple[list[dict], str | None, dict[st
         elif any(key in dataset for key in ("temperature", "conversion", "temp", "x", "y")):
             rows_source = [dataset]
 
-    rows = _clean_dataset(rows_source, feature_names=feature_names)
+    rows = _clean_dataset(rows_source, feature_names=feature_names, config=config)
     return rows, requested_model_id, config
 
 
@@ -828,13 +927,32 @@ def analyze_dataset(dataset: object) -> dict:
         model["constraint"] = _model_constraint_checks(model, rows, physics_profile)
 
     ranked_models = _rank_models(models, requested_model_id, physics_weight)
+    evidence_gates = build_evidence_gates(
+        rows,
+        ranked_models,
+        config,
+        _fit_model,
+        _predict_value,
+    )
     best = ranked_models[0]
     anomalies = _build_anomalies(best, rows)
+    anomaly_attribution = build_anomaly_attribution(rows, ranked_models, anomalies)
+    anomalies = anomaly_attribution["items"]
+    open_set = build_open_set_decision(rows, ranked_models, len(anomalies), _predict_value)
+    experiment_design = build_experiment_design(rows, ranked_models, config, _predict_value)
     min_temp = min(row["temperature"] for row in rows)
     max_temp = max(row["temperature"] for row in rows)
     curve = _build_curve(best, min_temp, max_temp)
     knowledge_graph = _build_knowledge_graph(best, anomalies, rows, physics_profile)
     suggestions = _build_suggestions(best, anomalies, rows, physics_profile)
+    if experiment_design.get("recommended"):
+        point = experiment_design["recommended"]
+        suggestions.insert(
+            0,
+            f"建议优先在 {point['temperature']}°C 开展判别实验；该点的信息增益为 {point['expected_information_gain']}，且满足当前成本与安全约束。",
+        )
+    if open_set["abstain"]:
+        suggestions.insert(0, "当前证据触发开放集拒答：暂不形成唯一机理结论，建议先补充关键证据。")
 
     fit_confidence = max(0.0, min(0.99, 0.54 + best["r2"] * 0.34 - best["rmse"] * 0.12))
     physics_confidence = best["constraint"]["score"] / 100.0
@@ -860,6 +978,10 @@ def analyze_dataset(dataset: object) -> dict:
                 "constraint_penalty": model["constraint"]["penalty"],
                 "feasible": model["constraint"]["feasible"],
                 "violations": model["constraint"]["violations"],
+                "gate_status": model["gate_status"],
+                "decision": model["decision"],
+                "evidence_score": model["evidence_score"],
+                "gates": model["gates"],
             }
             for model in ranked_models
         ],
@@ -881,8 +1003,11 @@ def analyze_dataset(dataset: object) -> dict:
             "complexity": model.get("complexity"),
             "constraint_score": model["constraint"]["score"],
             "feasible": model["constraint"]["feasible"],
-            "rank": model["rank"],
-        }
+                "rank": model["rank"],
+                "gate_status": model["gate_status"],
+                "decision": model["decision"],
+                "evidence": model["evidence"],
+            }
         for model in ranked_models
     ]
     symbolic_regression_layer["best_formula"] = next(
@@ -890,7 +1015,7 @@ def analyze_dataset(dataset: object) -> dict:
         symbolic_regression_layer.get("best_formula"),
     )
     hypothesis_ranking = {
-        "strategy": "fit_error + BIC + physics_constraint_penalty",
+        "strategy": "science_constraints + AICc/CV + bootstrap_stability",
         "physics_weight": physics_weight,
         "items": [
             {
@@ -904,11 +1029,18 @@ def analyze_dataset(dataset: object) -> dict:
                 "constraint_score": model["constraint"]["score"],
                 "combined_score": model["combined_score"],
                 "feasible": model["constraint"]["feasible"],
+                "gate_status": model["gate_status"],
+                "decision": model["decision"],
+                "evidence_score": model["evidence_score"],
+                "aicc": model["evidence"]["aicc"],
+                "cv_rmse": model["evidence"]["cv_rmse"],
+                "stability_score": model["evidence"]["bootstrap"]["score"],
             }
             for model in ranked_models
         ],
     }
 
+    audit = build_audit_record(rows, config, best, open_set)
     return {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "requested_model_id": requested_model_id,
@@ -922,11 +1054,22 @@ def analyze_dataset(dataset: object) -> dict:
         "models": ranked_models,
         "recommended_model": best,
         "anomalies": anomalies,
+        "anomaly_attribution": anomaly_attribution,
         "curve": curve,
         "knowledge_graph": knowledge_graph,
         "physics_constraints": physics_constraints,
         "symbolic_regression_layer": symbolic_regression_layer,
         "hypothesis_ranking": hypothesis_ranking,
+        "evidence_gates": evidence_gates,
+        "open_set_decision": open_set,
+        "experiment_design": experiment_design,
+        "audit": audit,
+        "data_contract": {
+            "normalized_temperature_unit": "C",
+            "normalized_conversion_unit": "fraction",
+            "raw_values_retained": True,
+            "provenance_fields": ["source_id", "source", "instrument", "operator", "replicate", "recorded_at"],
+        },
         "summary": {
             "sample_count": len(rows),
             "temperature_range": [min_temp, max_temp],
@@ -936,6 +1079,9 @@ def analyze_dataset(dataset: object) -> dict:
             "physics_score": best["constraint"]["score"],
             "projection_gap_mean": physics_profile["summary"]["projection_gap_mean"],
             "feasible_models": sum(1 for item in ranked_models if item["constraint"]["feasible"]),
+            "models_passing_all_gates": sum(1 for item in ranked_models if item["gate_status"] == "pass"),
+            "abstained": open_set["abstain"],
+            "h_other_probability": open_set["h_other_probability"],
         },
         "suggestions": suggestions,
         "core_technologies": CORE_TECHNOLOGIES,
@@ -951,6 +1097,11 @@ def analyze_dataset(dataset: object) -> dict:
                 "feasible-region projection",
                 "symbolic regression formula search",
                 "hypothesis ranking",
+                "AICc and cross-validation evidence gate",
+                "bootstrap identifiability and stability gate",
+                "reliability-weighted anomaly attribution",
+                "open-set abstention",
+                "constrained active experiment design",
                 "report generator",
                 "future LLM API adapter",
             ],
@@ -973,12 +1124,12 @@ def _physics_report_section(result: dict) -> list[str]:
         f"- 可行域投影平均修正：{summary.get('projection_gap_mean', 0)}",
         f"- 物理可行性评分：{summary.get('score', 0)}",
         "",
-        "| 模型 | 组合评分 | 约束评分 | 约束惩罚 | 可行性 |",
-        "| --- | ---: | ---: | ---: | --- |",
+        "| 模型 | 组合评分 | 约束评分 | 三道门控 | 决策 |",
+        "| --- | ---: | ---: | --- | --- |",
     ]
     for item in rankings:
         lines.append(
-            f"| {item['name']} | {item['combined_score']} | {item['constraint_score']} | {item['constraint_penalty']} | {'是' if item['feasible'] else '否'} |"
+            f"| {item['name']} | {item['combined_score']} | {item['constraint_score']} | {item.get('gate_status', '-')} | {item.get('decision', '-')} |"
         )
     return lines
 
@@ -997,6 +1148,8 @@ def build_report_markdown(result: dict, title: str) -> str:
         f"- 拟合 R²：{best['r2']}，RMSE：{best['rmse']}",
         f"- 异常点：{result['summary']['anomaly_count']} 个",
         f"- 物理评分：{result['summary'].get('physics_score', 0)}",
+        f"- 通过全部门控的模型：{result['summary'].get('models_passing_all_gates', 0)} 个",
+        f"- 是否拒答：{'是' if result['summary'].get('abstained') else '否'}",
         "",
         "## 二、核心技术",
     ]
@@ -1007,11 +1160,11 @@ def build_report_markdown(result: dict, title: str) -> str:
     lines += [
         "",
         "## 四、模型排行",
-        "| 模型 | 公式 | R² | RMSE | BIC |",
-        "| --- | --- | ---: | ---: | ---: |",
+        "| 模型 | 公式 | R² | AICc | CV-RMSE | 稳定性 | 门控 |",
+        "| --- | --- | ---: | ---: | ---: | ---: | --- |",
     ]
     lines.extend(
-        f"| {model['name']} | `{model['equation']}` | {model['r2']} | {model['rmse']} | {model['bic']} |"
+        f"| {model['name']} | `{model['equation']}` | {model['r2']} | {model.get('evidence', {}).get('aicc')} | {model.get('evidence', {}).get('cv_rmse')} | {model.get('evidence', {}).get('bootstrap', {}).get('score')} | {model.get('gate_status', '-')} |"
         for model in result["models"]
     )
     lines += [
@@ -1029,10 +1182,39 @@ def build_report_markdown(result: dict, title: str) -> str:
         "## 六、异常点",
     ]
     if result["anomalies"]:
-        lines += ["| 温度 | 转化率 | 批次 | 严重度 |", "| ---: | ---: | --- | --- |"]
-        lines.extend(f"| {item['temperature']} | {item['conversion']} | {item['batch']} | {item['severity']} |" for item in result["anomalies"])
+        lines += ["| 温度 | 转化率 | 批次 | 严重度 | 后验归因 | 动作 |", "| ---: | ---: | --- | --- | --- | --- |"]
+        lines.extend(
+            f"| {item['temperature']} | {item['conversion']} | {item['batch']} | {item['severity']} | {item.get('conclusion', '待复核')} | {item.get('action', '')} |"
+            for item in result["anomalies"]
+        )
     else:
         lines.append("当前未发现需要重点复核的异常点。")
 
-    lines += ["", "## 七、下一步实验建议", ""] + [f"{index}. {item}" for index, item in enumerate(result["suggestions"], 1)]
+    design = result.get("experiment_design", {})
+    recommended = design.get("recommended")
+    lines += ["", "## 七、下一步实验建议", ""]
+    if recommended:
+        lines += [
+            f"- 推荐温度：{recommended['temperature']} °C",
+            f"- 预期信息增益：{recommended['expected_information_gain']}",
+            f"- 估算成本：{recommended['estimated_cost']}",
+            f"- 实验区域：{recommended['region']}",
+            "- 需要研究人员或安全负责人最终确认。",
+            "",
+        ]
+    lines += [f"{index}. {item}" for index, item in enumerate(result["suggestions"], 1)]
+
+    open_set = result.get("open_set_decision", {})
+    audit = result.get("audit", {})
+    lines += [
+        "",
+        "## 八、开放集判断与审计",
+        "",
+        f"- H_other 概率：{open_set.get('h_other_probability', '-')}",
+        f"- 后验熵：{open_set.get('posterior_entropy', '-')}",
+        f"- 决策：{open_set.get('decision', '-')}",
+        f"- 触发因素：{', '.join(open_set.get('triggers', [])) or '无'}",
+        f"- 数据 SHA-256：`{audit.get('data_sha256', '-')}`",
+        f"- 引擎版本：{audit.get('engine_version', '-')}",
+    ]
     return "\n".join(lines) + "\n"
