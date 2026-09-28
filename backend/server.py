@@ -7,6 +7,7 @@ import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from zhi_engine.analysis import analyze_dataset, build_report_markdown, demo_dataset
 from zhi_engine.deepseek_client import DeepSeekAPIError, DeepSeekSettings, generate_deepseek_answer, load_deepseek_settings
 from zhi_engine.reporting import build_report_docx
-from zhi_engine.store import ConversationStore
+from zhi_engine.store import ConversationStore, EphemeralConversationStore
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,10 +35,11 @@ app.mount("/assets", StaticFiles(directory=ASSETS), name="assets")
 
 @dataclass
 class Runtime:
-    store: ConversationStore
+    store: ConversationStore | EphemeralConversationStore
     deepseek: DeepSeekSettings
     deployment_mode: str = "production"
     database_mode: str = "external"
+    configuration_warning: str | None = None
 
 
 _runtime: Runtime | None = None
@@ -70,31 +72,51 @@ def _get_runtime() -> Runtime:
         if _runtime is None:
             deployment_mode = _deployment_mode()
             production = deployment_mode in {"prod", "production"}
-            database_url = _clean_optional(os.environ.get("ZHIGOU_DATABASE_URL"))
-            if not database_url:
-                raise HTTPException(
-                    status_code=500,
-                    detail={"error": "服务未完成生产配置", "detail": "请配置 ZHIGOU_DATABASE_URL。"},
-                )
-
             deepseek = load_deepseek_settings()
-            if _env_bool("ZHIGOU_REQUIRE_DEEPSEEK", production) and not deepseek.enabled:
+            require_deepseek = _env_bool("ZHIGOU_REQUIRE_DEEPSEEK", production)
+            if require_deepseek and not deepseek.enabled:
                 raise HTTPException(
                     status_code=500,
                     detail={"error": "服务未完成生产配置", "detail": "请配置 DEEPSEEK_API_KEY。"},
                 )
 
-            try:
-                _runtime = Runtime(
-                    store=ConversationStore(database_url, legacy_json_path=DATA / "conversations.json"),
-                    deepseek=deepseek,
-                    deployment_mode=deployment_mode,
-                )
-            except Exception as exc:
+            database_url = _clean_optional(os.environ.get("ZHIGOU_DATABASE_URL"))
+            require_external_db = _env_bool("ZHIGOU_REQUIRE_EXTERNAL_DB", False)
+            if not database_url and require_external_db:
                 raise HTTPException(
                     status_code=500,
-                    detail={"error": "数据库连接失败", "detail": str(exc)},
-                ) from exc
+                    detail={"error": "服务未完成生产配置", "detail": "请配置 ZHIGOU_DATABASE_URL。"},
+                )
+
+            if database_url:
+                try:
+                    store: ConversationStore | EphemeralConversationStore = ConversationStore(
+                        database_url,
+                        legacy_json_path=DATA / "conversations.json",
+                    )
+                    database_mode = "external"
+                    configuration_warning = None
+                except Exception as exc:
+                    if require_external_db:
+                        raise HTTPException(
+                            status_code=500,
+                            detail={"error": "数据库连接失败", "detail": str(exc)},
+                        ) from exc
+                    store = EphemeralConversationStore()
+                    database_mode = "ephemeral"
+                    configuration_warning = "数据库暂不可用，已切换为临时会话模式；分析与智能对话可用，但历史不会持久保存。"
+            else:
+                store = EphemeralConversationStore()
+                database_mode = "ephemeral"
+                configuration_warning = "未配置外部数据库，当前使用临时会话模式；分析与智能对话可用，但历史不会持久保存。"
+
+            _runtime = Runtime(
+                store=store,
+                deepseek=deepseek,
+                deployment_mode=deployment_mode,
+                database_mode=database_mode,
+                configuration_warning=configuration_warning,
+            )
     return _runtime
 
 
@@ -121,6 +143,28 @@ async def _read_payload(request: Request) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail={"error": "request body must be a JSON object"})
     return payload
+
+
+def _request_history(payload: dict[str, Any]) -> list[dict[str, str]]:
+    raw_history = payload.get("history")
+    if not isinstance(raw_history, list):
+        return []
+    history: list[dict[str, str]] = []
+    for item in raw_history[-20:]:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role", ""))
+        content = str(item.get("content", "")).strip()
+        if role not in {"user", "assistant"} or not content:
+            continue
+        history.append(
+            {
+                "role": role,
+                "content": content[:4000],
+                "time": str(item.get("time", "")),
+            }
+        )
+    return history
 
 
 def _unwrap_latex_command(text: str, command: str) -> str:
@@ -247,9 +291,14 @@ def _compose_answer(intent: str, result: dict[str, Any]) -> str:
     return "我可以帮你筛模型、拟合曲线、找异常点，并把结果整理成对话里的报告。"
 
 
+@lru_cache(maxsize=1)
+def _demo_analysis() -> dict[str, Any]:
+    return analyze_dataset(demo_dataset())
+
+
 def _bootstrap_payload(runtime: Runtime | None = None) -> dict[str, Any]:
-    sample_result = analyze_dataset(demo_dataset())
-    return {
+    sample_result = _demo_analysis()
+    payload = {
         "deployment_mode": runtime.deployment_mode if runtime else _deployment_mode(),
         "database_mode": runtime.database_mode if runtime else "unconfigured",
         "llm_provider": runtime.deepseek.public_state() if runtime else load_deepseek_settings().public_state(mode="offline_demo"),
@@ -278,16 +327,46 @@ def _bootstrap_payload(runtime: Runtime | None = None) -> dict[str, Any]:
         "data_contract": sample_result["data_contract"],
         "audit": sample_result["audit"],
     }
+    if runtime and runtime.configuration_warning:
+        payload["configuration_warning"] = runtime.configuration_warning
+    return payload
 
 
 @app.get("/api/bootstrap")
 async def bootstrap():
     try:
         return _bootstrap_payload(_get_runtime())
-    except Exception:
+    except Exception as exc:
         payload = _bootstrap_payload()
-        payload["configuration_warning"] = "数据库尚未配置，当前仅返回离线演示能力；分析记录不会持久化。"
+        payload["configuration_warning"] = f"服务配置不完整，当前仅返回离线演示能力：{exc}"
         return payload
+
+
+@app.get("/api/health")
+async def health() -> JSONResponse:
+    try:
+        runtime = _get_runtime()
+    except Exception as exc:
+        return JSONResponse(
+            {
+                "status": "degraded",
+                "service": "zhigou-engine",
+                "detail": str(exc),
+            },
+            status_code=503,
+        )
+    return JSONResponse(
+        {
+            "status": "ok",
+            "service": "zhigou-engine",
+            "deployment_mode": runtime.deployment_mode,
+            "database_mode": runtime.database_mode,
+            "persistence_enabled": runtime.database_mode == "external",
+            "deepseek_configured": runtime.deepseek.enabled,
+            "deepseek_model": runtime.deepseek.model,
+            "configuration_warning": runtime.configuration_warning,
+        }
+    )
 
 
 @app.get("/api/conversations/{conversation_id}")
@@ -333,6 +412,8 @@ async def chat(request: Request) -> JSONResponse:
     intent = _infer_intent(text)
     local_answer = _compose_answer(intent, result)
     existing_conversation = runtime.store.get_conversation(conversation_id)
+    request_history = _request_history(payload)
+    conversation_context = existing_conversation or ({"messages": request_history} if request_history else None)
     answer = local_answer
     llm_meta = runtime.deepseek.public_state(mode="local_fallback")
     if runtime.deepseek.enabled:
@@ -342,7 +423,7 @@ async def chat(request: Request) -> JSONResponse:
                 user_text=text,
                 intent=intent,
                 result=result,
-                conversation=existing_conversation,
+                conversation=conversation_context,
             )
         except DeepSeekAPIError as exc:
             llm_meta = runtime.deepseek.public_state(mode="error", error=str(exc))
@@ -365,6 +446,8 @@ async def chat(request: Request) -> JSONResponse:
         plan=payload.get("plan"),
         theme=payload.get("theme"),
     )
+    if runtime.database_mode == "ephemeral" and existing_conversation is None and request_history:
+        conversation["messages"] = [*request_history, *conversation.get("messages", [])]
     runtime.store.record_analysis(source="chat", dataset=dataset, result=result, conversation_id=conversation_id)
     return JSONResponse({"conversation": conversation, "result": result, "intent": intent, "llm": llm_meta})
 

@@ -220,6 +220,7 @@ async function bootstrap() {
 
     if (response.ok && data.database_mode !== "offline_mock") {
       updateStatus(`已连接 · ${databaseModeText(data.database_mode, data.deployment_mode)}`);
+      if (data.configuration_warning) console.warn(data.configuration_warning);
     } else {
       updateStatus("离线演示模式 · 数据驾驶舱已就绪");
     }
@@ -248,6 +249,7 @@ function databaseModeText(mode, deploymentMode = "development") {
   const isProd = ["prod", "production"].includes(deploymentMode);
   if (mode === "embedded") return isProd ? "生产配置异常：内置 PostgreSQL" : "开发内置 PostgreSQL";
   if (mode === "external") return isProd ? "生产外部 PostgreSQL" : "外部 PostgreSQL";
+  if (mode === "ephemeral") return "临时会话（历史不持久）";
   return "本地模式";
 }
 
@@ -402,73 +404,32 @@ async function analyzeCurrentDataset(silent = false) {
   try {
     if (!silent) updateStatus("正在执行物理约束分析与符号推导...");
 
-    // 获取当前输入框中的数据
-    const rawData = state.currentData || getEditorData();
-
-    let result = null;
-    try {
-      const response = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ data: rawData })
-      });
-
-      if (response.ok) {
-        result = await response.json();
-      } else {
-        console.warn(`后端分析接口返回异常状态码: ${response.status}`);
-      }
-    } catch (netErr) {
-      console.warn("网络请求失败，启动本地计算仿真引擎:", netErr);
+    const dataset = parseRows(el.datasetInput?.value.trim() || demoData);
+    const response = await fetch("/api/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        dataset,
+        conversationId: state.conversationId,
+      }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(result.detail || result.error || `分析服务异常（HTTP ${response.status}）`);
     }
 
-    // 如果后端未返回或报错，自动使用高保真科研拟合结果兜底
-    if (!result || result.status !== "success") {
-      result = {
-        status: "success",
-        recommended_model: "Arrhenius 动力学模型",
-        r2_score: "0.987",
-        confidence: "98.7%",
-        anomalies_detected: 1,
-        equation: "k(T) = A · exp(-(E_a - ΔG_surf) / RT)",
-        parameters: {
-          "A (指前因子)": "2.35 × 10³ s⁻¹",
-          "Ea (活化能)": "68.42 kJ/mol",
-          "ΔG_surf (表面修正)": "18.76 kJ/mol"
-        },
-        chart_data: {
-          raw_points: [
-            { x: 280, y: 1e-4 }, { x: 300, y: 2.1e-3 }, { x: 320, y: 1.5e-2 },
-            { x: 340, y: 4.8e-2 }, { x: 360, y: 0.12 }, { x: 380, y: 0.28 }
-          ],
-          fitted_curve: [
-            { x: 280, y: 1.1e-4 }, { x: 300, y: 1.9e-3 }, { x: 320, y: 1.6e-2 },
-            { x: 340, y: 5.1e-2 }, { x: 360, y: 0.11 }, { x: 380, y: 0.29 }
-          ],
-          suggested_points: [{ x: 350, y: 0.08 }]
-        },
-        physics_check: "热力学一致性 (ΔG ≤ 0) 检验通过",
-        hypothesis_ranking: [
-          { rank: 1, name: "Arrhenius 动力学模型", aic: "-1423.8", r2: 0.987 },
-          { rank: 2, name: "Langmuir-Hinshelwood 机理", aic: "-1287.6", r2: 0.962 },
-          { rank: 3, name: "经验多项式模型", aic: "987.2", r2: 0.891 }
-        ]
-      };
-    }
-
-    // 渲染右侧驾驶舱所有模块
-    renderMetrics(result);
-    renderFittedChart(result.chart_data);
-    renderPhysicsValidation(result.physics_check);
-    renderHypothesisRanking(result.hypothesis_ranking);
+    state.result = result;
+    renderAnalysis(result);
 
     if (!silent) {
-      updateStatus("分析完成 · 物理约束验证通过");
+      const decision = result.summary?.abstained ? "建议补充证据" : "证据门控已完成";
+      updateStatus(`分析完成 · ${decision}`);
     }
 
   } catch (err) {
     console.error("Analysis render failed:", err);
-    // 捕获异常，绝不弹出红色阻断弹窗
+    updateStatus("分析失败");
+    if (!silent) showToast(err.message || "分析失败，请稍后重试");
   }
 }
 
@@ -496,6 +457,11 @@ async function onSendMessage() {
         message,
         dataset,
         conversationId: state.conversationId,
+        history: (state.conversation?.messages || []).slice(-20).map((item) => ({
+          role: item.role,
+          content: item.content,
+          time: item.time,
+        })),
         plan: state.plan,
         theme: state.theme,
       }),

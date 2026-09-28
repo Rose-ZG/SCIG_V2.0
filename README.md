@@ -8,8 +8,8 @@
   <img alt="Version" src="https://img.shields.io/badge/version-0.5.0-1f6feb" />
   <img alt="Python" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" />
   <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi&logoColor=white" />
-  <img alt="PostgreSQL" src="https://img.shields.io/badge/PostgreSQL-Required_in_Production-4169E1?logo=postgresql&logoColor=white" />
-  <img alt="Tests" src="https://img.shields.io/badge/tests-11_passing-2ea44f" />
+  <img alt="PostgreSQL" src="https://img.shields.io/badge/PostgreSQL-Optional_Persistence-4169E1?logo=postgresql&logoColor=white" />
+  <img alt="Tests" src="https://img.shields.io/badge/tests-13_passing-2ea44f" />
 </p>
 
 <p>
@@ -45,9 +45,9 @@
 | 当前版本 | `0.5.0` |
 | 成熟度 | 可运行、可测试的科研决策原型 |
 | 默认工作模式 | 本地规则代理 + 物理约束优化 |
-| 生产数据存储 | 外部 PostgreSQL |
+| 生产数据存储 | 推荐外部 PostgreSQL；未配置时自动使用临时会话模式 |
 | 可选大模型 | DeepSeek API；不可用时可配置为本地规则兜底 |
-| 自动化验证 | 11 项 `unittest`，覆盖核心分析、HTTP、报告和公式安全 |
+| 自动化验证 | 13 项 `unittest`，覆盖核心分析、HTTP、无数据库降级、报告和公式安全 |
 
 ## 核心能力
 
@@ -127,7 +127,7 @@ flowchart LR
 
 | 技术 | 版本/要求 | 用途 |
 | --- | --- | --- |
-| PostgreSQL | 生产环境必需 | 对话、分析结果和报告审计记录 |
+| PostgreSQL | 生产持久化推荐 | 对话、分析结果和报告审计记录 |
 | Psycopg 3 | `>= 3.2` | PostgreSQL 驱动与 JSONB 数据访问 |
 | pg0-embedded | `>= 0.15.1` | 本地演示的内嵌 PostgreSQL |
 | python-docx | `>= 1.1` | DOCX 科研报告生成 |
@@ -179,7 +179,7 @@ SCIG/
 - Python 3.10 或更高版本；推荐 Python 3.12；
 - Windows PowerShell、macOS 或 Linux 终端；
 - 首次安装依赖时可访问 Python 包索引；
-- 生产部署需提供外部 PostgreSQL。
+- 如需持久保存对话和审计记录，生产部署需提供外部 PostgreSQL。
 
 确认 Python 版本：
 
@@ -226,7 +226,7 @@ python main.py
 python -m unittest discover -s tests -v
 ```
 
-预期结果：11 项测试全部通过。测试覆盖：
+预期结果：13 项测试全部通过。测试覆盖：
 
 - 单位归一化、原始值保留与追溯字段；
 - 三道证据门控、Bootstrap 稳定性和开放集拒答；
@@ -271,11 +271,12 @@ python -m unittest discover -s tests -v
 
 | 方法 | 路径 | 用途 | 持久化要求 |
 | --- | --- | --- | --- |
+| `GET` | `/api/health` | 检查部署、数据库模式与 DeepSeek 配置状态 | 无 |
 | `GET` | `/api/bootstrap` | 获取工作台能力、演示结果与配置警告 | 无数据库时可降级返回 |
-| `POST` | `/api/analyze` | 执行完整科学判断流程 | 需要可用数据库运行时 |
-| `POST` | `/api/chat` | 生成本地规则或 DeepSeek 对话回复 | 需要数据库 |
-| `POST` | `/api/report` | 生成 Markdown 或 DOCX 报告 | 需要数据库 |
-| `GET` | `/api/conversations/{id}` | 读取对话与分析记录 | 需要数据库 |
+| `POST` | `/api/analyze` | 执行完整科学判断流程 | 临时模式可用；数据库用于审计持久化 |
+| `POST` | `/api/chat` | 生成本地规则或 DeepSeek 对话回复 | 临时模式可用；数据库用于历史持久化 |
+| `POST` | `/api/report` | 生成 Markdown 或 DOCX 报告 | 临时模式可用；数据库用于记录持久化 |
+| `GET` | `/api/conversations/{id}` | 读取对话与分析记录 | 临时模式仅保证当前函数实例内可用 |
 
 FastAPI 部署还提供自动接口文档：`/docs` 和 `/redoc`。
 
@@ -404,8 +405,8 @@ FastAPI 部署还提供自动接口文档：`/docs` 和 `/redoc`。
 | 模式 | 启动入口 | 数据库 | DeepSeek | 适用场景 |
 | --- | --- | --- | --- | --- |
 | 本地演示 | `python main.py` | 默认内嵌 PostgreSQL | 可选，本地规则可兜底 | 开发、演示、离线验证 |
-| 自托管 ASGI | `uvicorn backend.server:app` | 外部 PostgreSQL | 生产默认必需 | 内网服务、容器平台 |
-| Vercel | `backend.server:app` | 外部 PostgreSQL | 生产默认必需 | Serverless Web 部署 |
+| 自托管 ASGI | `uvicorn backend.server:app` | 外部 PostgreSQL 或临时会话 | 生产默认必需 | 内网服务、容器平台 |
+| Vercel | `backend.server:app` | 外部 PostgreSQL 或临时会话 | 生产默认必需 | Serverless Web 部署 |
 
 ### 环境变量
 
@@ -416,8 +417,8 @@ FastAPI 部署还提供自动接口文档：`/docs` 和 `/redoc`。
 | `ZHIGOU_ENV` | 是 | 本地为 `development` | 生产使用 `production` |
 | `ZHIGOU_HOST` | 否 | `127.0.0.1` | 本地 HTTP 监听地址 |
 | `ZHIGOU_PORT` | 否 | `8000` | 本地 HTTP 监听端口 |
-| `ZHIGOU_DATABASE_URL` | 是 | 空 | PostgreSQL DSN，建议启用 SSL |
-| `ZHIGOU_REQUIRE_EXTERNAL_DB` | 是 | 生产为 `true` | 禁止生产环境回退到内嵌数据库 |
+| `ZHIGOU_DATABASE_URL` | 持久化时必需 | 空 | PostgreSQL DSN，建议启用 SSL；留空时使用临时会话 |
+| `ZHIGOU_REQUIRE_EXTERNAL_DB` | 否 | `false` | 设为 `true` 时，数据库不可用将阻止服务启动 |
 | `ZHIGOU_ALLOW_EMBEDDED_DB` | 是 | 生产为 `false` | 是否允许内嵌 PostgreSQL |
 | `DEEPSEEK_API_KEY` | 条件必需 | 空 | DeepSeek 服务端密钥 |
 | `DEEPSEEK_BASE_URL` | 否 | `https://api.deepseek.com` | DeepSeek API 地址 |
@@ -434,7 +435,7 @@ $env:ZHIGOU_ENV="production"
 $env:ZHIGOU_HOST="0.0.0.0"
 $env:ZHIGOU_PORT="8000"
 $env:ZHIGOU_DATABASE_URL="postgresql://user:password@host:5432/zhigou?sslmode=require"
-$env:ZHIGOU_REQUIRE_EXTERNAL_DB="true"
+$env:ZHIGOU_REQUIRE_EXTERNAL_DB="true" # 需要持久化时启用严格模式
 $env:ZHIGOU_ALLOW_EMBEDDED_DB="false"
 $env:DEEPSEEK_API_KEY="your-secret"
 python main.py
@@ -445,7 +446,7 @@ python main.py
 - [ ] 使用受支持的 Python 版本并锁定部署依赖；
 - [ ] PostgreSQL 使用独立账号、最小权限、TLS 和备份策略；
 - [ ] 所有密钥由密钥管理服务注入，仓库和前端中无明文；
-- [ ] `ZHIGOU_REQUIRE_EXTERNAL_DB=true` 且 `ZHIGOU_ALLOW_EMBEDDED_DB=false`；
+- [ ] 需要持久审计时配置 `ZHIGOU_DATABASE_URL`，并设置 `ZHIGOU_REQUIRE_EXTERNAL_DB=true`；
 - [ ] 运行完整自动化测试并保存测试记录；
 - [ ] 使用真实领域数据完成模型校准、误差评估和专家验收；
 - [ ] 在反向代理或平台层配置 TLS、认证、授权、限流和请求体限制；

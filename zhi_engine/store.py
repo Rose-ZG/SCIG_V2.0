@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import threading
 import uuid
@@ -35,6 +36,97 @@ def _parse_timestamp(value: Any) -> datetime:
             return _now()
         return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
     return _now()
+
+
+class EphemeralConversationStore:
+    """Process-local fallback used when a serverless deployment has no database.
+
+    The store keeps the API functional without pretending to provide durable
+    persistence. Vercel may recycle or route between function instances, so
+    callers must treat this data as temporary.
+    """
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self._conversations: dict[str, dict[str, Any]] = {}
+
+    def list_conversations(self) -> list[dict]:
+        with self.lock:
+            conversations = sorted(
+                self._conversations.values(),
+                key=lambda item: str(item.get("updatedAt", "")),
+                reverse=True,
+            )
+            return [
+                {
+                    "id": item["id"],
+                    "title": item["title"],
+                    "preview": item["preview"],
+                    "updatedAt": item["updatedAt"],
+                }
+                for item in copy.deepcopy(conversations)
+            ]
+
+    def get_conversation(self, conversation_id: str) -> dict | None:
+        with self.lock:
+            conversation = self._conversations.get(conversation_id)
+            return copy.deepcopy(conversation) if conversation is not None else None
+
+    def append_messages(
+        self,
+        conversation_id: str,
+        user: dict,
+        assistant: dict,
+        *,
+        plan: str | None = None,
+        theme: str | None = None,
+    ) -> dict:
+        now = _now().isoformat(timespec="seconds")
+        with self.lock:
+            conversation = self._conversations.setdefault(
+                conversation_id,
+                {
+                    "id": conversation_id,
+                    "title": str(user.get("content", ""))[:26] or "新对话",
+                    "preview": "",
+                    "createdAt": now,
+                    "updatedAt": now,
+                    "plan": plan or "专业版",
+                    "theme": theme or "light",
+                    "metadata": {"persistence": "ephemeral"},
+                    "messages": [],
+                },
+            )
+            conversation["preview"] = str(assistant.get("content", ""))[:72]
+            conversation["updatedAt"] = now
+            if plan:
+                conversation["plan"] = str(plan)
+            if theme:
+                conversation["theme"] = str(theme)
+            conversation["messages"].extend((copy.deepcopy(user), copy.deepcopy(assistant)))
+            return copy.deepcopy(conversation)
+
+    def record_analysis(
+        self,
+        *,
+        source: str,
+        dataset: object,
+        result: dict,
+        conversation_id: str | None = None,
+    ) -> None:
+        # Deliberately do not retain potentially sensitive datasets in a
+        # process-global list when durable storage has not been configured.
+        return None
+
+    def record_report(
+        self,
+        *,
+        title: str,
+        result: dict,
+        report_format: str,
+        conversation_id: str | None = None,
+    ) -> None:
+        return None
 
 
 class ConversationStore:
